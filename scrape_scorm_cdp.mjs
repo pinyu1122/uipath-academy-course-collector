@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 
 const CDP_JSON = "http://127.0.0.1:9222/json";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -54,6 +55,61 @@ function filenameFromUrl(url, fallback = "download") {
     return safeFilename(name || fallback, 140);
   } catch (_) {
     return safeFilename(fallback, 140);
+  }
+}
+
+function cleanDownloadFilename(rawName, ext = "") {
+  let name = String(rawName || "download")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const wantedExt = ext || path.extname(name);
+  if (wantedExt) {
+    const escapedExt = wantedExt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    name = name
+      .replace(new RegExp(`\\s*\\(?\\s*\\d+(?:\\.\\d+)?\\s*(?:KB|MB|GB|B)\\s*${escapedExt}\\s*\\)?\\s*$`, "i"), "")
+      .replace(new RegExp(`\\s+\\d+(?:\\.\\d+)?\\s*(?:KB|MB|GB|B)\\s*$`, "i"), "");
+
+    while (name.toLowerCase().endsWith((wantedExt + wantedExt).toLowerCase())) {
+      name = name.slice(0, -wantedExt.length);
+    }
+
+    if (!name.toLowerCase().endsWith(wantedExt.toLowerCase())) name += wantedExt;
+  } else {
+    name = name.replace(/\s*[\[(]?\s*\d+(?:\.\d+)?\s*(?:KB|MB|GB|B)\s*[\])]?\s*$/i, "");
+  }
+
+  return safeFilename(name, 140);
+}
+
+function unzipDownloadedFile(filePath, downloadsDir) {
+  if (path.extname(filePath).toLowerCase() !== ".zip") return null;
+
+  const baseName = safeFilename(path.basename(filePath, ".zip"), 120);
+  const extractDir = path.join(downloadsDir, "extracted", baseName);
+  fs.rmSync(extractDir, { recursive: true, force: true });
+  fs.mkdirSync(extractDir, { recursive: true });
+
+  try {
+    execFileSync("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force",
+      filePath,
+      extractDir,
+    ], { stdio: "pipe" });
+
+    return { extracted: true, extractDir };
+  } catch (error) {
+    fs.rmSync(extractDir, { recursive: true, force: true });
+    return {
+      extracted: false,
+      extractDir,
+      error: String(error?.stderr || error?.message || error).trim(),
+    };
   }
 }
 
@@ -242,13 +298,14 @@ async function downloadAttachment(item, downloadsDir, prefix) {
     const dispositionMatch = contentDisposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
     const dispositionName = dispositionMatch ? decodeURIComponent(dispositionMatch[1].replace(/"$/g, "")) : "";
     const ext = path.extname(new URL(url).pathname) || extensionFromContentType(response.headers.get("content-type"));
-    let baseName = safeFilename(dispositionName || item.text || filenameFromUrl(url, "download"), 120);
-    if (ext && !baseName.toLowerCase().endsWith(ext.toLowerCase())) baseName += ext;
+    const rawName = dispositionName || item.text || filenameFromUrl(url, "download");
+    const baseName = cleanDownloadFilename(rawName, ext);
     const filename = safeFilename(`${prefix}_${baseName}`, 170);
     const filePath = path.join(downloadsDir, filename);
     const buffer = Buffer.from(await response.arrayBuffer());
     fs.writeFileSync(filePath, buffer);
-    return { ...item, downloaded: true, filename, path: filePath, bytes: buffer.length };
+    const extraction = unzipDownloadedFile(filePath, downloadsDir);
+    return { ...item, downloaded: true, filename, path: filePath, bytes: buffer.length, extraction };
     } catch (error) {
       lastError = String(error?.message || error);
       await sleep(500 * attempt);
@@ -298,6 +355,11 @@ function markdownForLesson(index, lesson) {
     for (const file of lesson.downloadedFiles) {
       if (file.downloaded) {
         out.push(`- ${file.filename} (${file.bytes || 0} bytes)`);
+        if (file.extraction?.extracted) {
+          out.push(`  - Extracted to: ${file.extraction.extractDir}`);
+        } else if (file.extraction?.error) {
+          out.push(`  - Extract failed: ${file.extraction.error}`);
+        }
       } else {
         out.push(`- ${file.text || file.href}: download failed${file.error ? ` (${file.error})` : ""}`);
       }

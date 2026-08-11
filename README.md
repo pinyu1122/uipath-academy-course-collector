@@ -29,7 +29,7 @@ academy_course_output/<課程名稱>/
 - `full_course.md`：整門課合併成一份 Markdown。
 - `scorm_scrape_report.json`：擷取報告與偵測到的原始資料。
 - `raw_captions/`：如果影片有 Wistia 字幕，會保留原始字幕 JSON 或 VTT。
-- `downloads/`：課程內可下載的 PDF、ZIP、DOCX、XLSX、TXT、XAML、NUPKG、UIPX 等附件。
+- `downloads/`：課程內可下載的 PDF、ZIP、DOCX、XLSX、TXT、XAML、NUPKG、UIPX 等附件。檔名會自動去掉畫面上的檔案大小文字，例如 `132.5 KB`；如果下載的是 `.zip`，會自動解壓到 `downloads/extracted/`。
 - `interactive_walkthroughs/`：Scribe 互動教學的原始擷取 JSON。
 - `## Quiz Questions`：如果課程含 `Check your knowledge`，會在該 lesson Markdown 內列出題目、題型與選項；程式不會自動作答或送出 quiz。
 - `## Rise Interactive Blocks`：如果 lesson 內含 Rise accordion/button 等互動區塊，會從課程資料補出各項目的標題、說明與圖片檔名。
@@ -65,6 +65,7 @@ academy_course_output/Build your first agent with UiPath Studio Web/
 - 執行爬蟲前，Chrome 裡要停在真正的課程 lesson player，不是 learning plan 清單頁。
 - 影片畫面空白不一定代表不能抓字幕；只要頁面載入了 Wistia media id，程式會直接嘗試抓字幕端點。
 - 重跑同一門課時，程式會先清空該課程輸出資料夾中的 `lessons/`、`raw_captions/`、`downloads/`、`interactive_walkthroughs/`、`_debug/`，再重新產生結果，避免新舊資料混在一起。
+- `.zip` 檔會使用 Windows PowerShell 的 `Expand-Archive` 自動解壓；`.rar`、`.7z` 這類格式仍會下載保存，但不會自動解壓。
 - 如果同時開很多個 UiPath SCORM 課程分頁，建議只保留你要整理的那一個，避免抓到錯的課程。
 
 ## 需求
