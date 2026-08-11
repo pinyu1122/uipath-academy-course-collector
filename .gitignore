@@ -1,0 +1,5 @@
+academy_course_output/
+*.zip
+*.log
+node_modules/
+.env
