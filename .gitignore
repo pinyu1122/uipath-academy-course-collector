@@ -1,4 +1,5 @@
-academy_course_output/
+academy_course_output/*
+!academy_course_output/.gitkeep
 *.zip
 *.log
 node_modules/
