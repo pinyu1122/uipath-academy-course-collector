@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const CDP_JSON = "http://127.0.0.1:9222/json";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SCORM_SCRAPER = path.join(SCRIPT_DIR, "scrape_scorm_cdp.mjs");
-const OUT_ROOT = path.join(SCRIPT_DIR, "academy_course_output");
+const BASE_OUT_ROOT = path.join(SCRIPT_DIR, "output");
 const MAX_STEPS = Number(process.env.MAX_NEXT_STEPS || 100);
 
 function sleep(ms) {
@@ -17,6 +17,17 @@ function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function safeFilename(text, maxLen = 100) {
+  return (text || "untitled")
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLen)
+    .replace(/[ ._]+$/g, "") || "untitled";
+}
+
+let OUT_ROOT = null;
+
 function isSurveyPage(summary) {
   const haystack = `${summary?.url || ""}\n${summary?.title || ""}\n${summary?.iframeSrc || ""}\n${summary?.text || ""}`;
   return /survey|surveymonkey|feedback/i.test(haystack);
@@ -26,28 +37,54 @@ async function cdpConnect(wsUrl) {
   const ws = new WebSocket(wsUrl);
   let id = 0;
   const pending = new Map();
+  let opened = false;
+
+  const eventError = event => {
+    if (event instanceof Error) return event;
+    return new Error(event?.message || event?.error?.message || "CDP WebSocket error");
+  };
+
+  const settlePending = error => {
+    for (const { reject } of pending.values()) reject(error);
+    pending.clear();
+  };
 
   ws.onmessage = ev => {
     const msg = JSON.parse(ev.data);
     if (msg.id && pending.has(msg.id)) {
-      pending.get(msg.id)(msg);
+      pending.get(msg.id).resolve(msg);
       pending.delete(msg.id);
     }
   };
 
   await new Promise((resolve, reject) => {
-    ws.onopen = resolve;
-    ws.onerror = reject;
+    ws.onopen = () => {
+      opened = true;
+      resolve();
+    };
+    ws.onerror = event => {
+      const error = eventError(event);
+      if (!opened) reject(error);
+      settlePending(error);
+    };
+    ws.onclose = () => {
+      settlePending(new Error("CDP WebSocket closed"));
+    };
   });
 
   return {
     async send(method, params = {}) {
+      if (ws.readyState !== WebSocket.OPEN) {
+        throw new Error("CDP WebSocket is not open");
+      }
       const mid = ++id;
       ws.send(JSON.stringify({ id: mid, method, params }));
-      return new Promise(resolve => pending.set(mid, resolve));
+      return new Promise((resolve, reject) => pending.set(mid, { resolve, reject }));
     },
     close() {
-      ws.close();
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
     },
   };
 }
@@ -93,8 +130,9 @@ async function findPrimePlayerTarget() {
 async function inspectPrimePlayerTarget(target) {
   if (!target?.webSocketDebuggerUrl) return { isScorm: false, reason: "Missing websocket URL" };
 
-  const primeClient = await cdpConnect(target.webSocketDebuggerUrl);
+  let primeClient = null;
   try {
+    primeClient = await cdpConnect(target.webSocketDebuggerUrl);
     return await evaluate(primeClient, `(() => {
       const clean = text => (text || '').replace(/\\s+/g, ' ').trim();
       const moduleFrame = document.querySelector('#modulePlayerIframe');
@@ -156,7 +194,7 @@ async function inspectPrimePlayerTarget(target) {
       primeUrl: target.url,
     };
   } finally {
-    primeClient.close();
+    primeClient?.close();
   }
 }
 
@@ -165,7 +203,12 @@ async function waitForPrimePlayerResult(previousUrl = "", timeoutMs = 45000) {
   while (Date.now() - start < timeoutMs) {
     const target = await findPrimePlayerTarget();
     if (target && (!previousUrl || target.url !== previousUrl)) {
-      const inspection = await inspectPrimePlayerTarget(target);
+      const inspection = await inspectPrimePlayerTarget(target).catch(error => ({
+        isScorm: false,
+        isReady: false,
+        error: String(error?.message || error),
+        primeUrl: target.url,
+      }));
       if (inspection.isAssessment || (inspection.hasContentFrame && !inspection.isScorm && inspection.contentAccessError)) {
         return { target: null, nonScorm: true, inspection };
       }
@@ -232,6 +275,39 @@ async function getPageSummary(client) {
       text: clean(document.body?.innerText || '').slice(0, 300),
     };
   })()`);
+}
+
+async function getLearningPlanTitle(client) {
+  const title = await evaluate(client, `(() => {
+    const clean = text => (text || '').replace(/\\s+/g, ' ').trim();
+    const visible = el => {
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.visibility !== 'hidden' &&
+        style.display !== 'none' &&
+        rect.width > 0 &&
+        rect.height > 0;
+    };
+
+    const headings = [...document.querySelectorAll('h1,h2')]
+      .filter(visible)
+      .map(el => clean(el.innerText || el.textContent))
+      .filter(Boolean)
+      .filter(text => !/^(Previous|Next|Table of contents)$/i.test(text));
+
+    const pageTitle = clean(document.title || '').replace(/\\s*[-|]\\s*UiPath Academy\\s*$/i, '');
+    const slug = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '')
+      .replace(/[-_]+/g, ' ')
+      .replace(/\\b\\w/g, ch => ch.toUpperCase());
+
+    return headings.find(text => /training|developer|academy|automation|studio|course|learning/i.test(text)) ||
+      headings[0] ||
+      pageTitle ||
+      slug ||
+      'Learning Plan';
+  })()`);
+
+  return safeFilename(title, 90);
 }
 
 async function clickStartOrResume(client) {
@@ -369,6 +445,10 @@ async function runScormScraper() {
       execFileSync(process.execPath, [SCORM_SCRAPER], {
         cwd: SCRIPT_DIR,
         stdio: "inherit",
+        env: {
+          ...process.env,
+          UIPATH_ACADEMY_OUTPUT_ROOT: OUT_ROOT,
+        },
       });
       return { ok: true, attempts: attempt };
     } catch (error) {
@@ -384,15 +464,24 @@ async function runScormScraper() {
   };
 }
 
+const client = await getAcademyPageClient();
+const learningPlanTitle = await getLearningPlanTitle(client).catch(() => "Learning Plan");
+OUT_ROOT = path.resolve(
+  process.env.UIPATH_ACADEMY_BATCH_OUTPUT_ROOT ||
+  path.join(BASE_OUT_ROOT, learningPlanTitle)
+);
+
 const runLog = {
   startedAt: new Date().toISOString(),
+  learningPlanTitle,
+  outputRoot: OUT_ROOT,
   maxSteps: MAX_STEPS,
   modules: [],
 };
 
 fs.mkdirSync(path.join(OUT_ROOT, "_learning_plan_runs"), { recursive: true });
 
-const client = await getAcademyPageClient();
+console.log(`本次 learning plan 輸出資料夾：${OUT_ROOT}`);
 
 try {
   let primeTarget = await hasOuterNext(client) ? await waitForPrimePlayer("", 2000) : null;

@@ -5,7 +5,12 @@ import { execFileSync } from "node:child_process";
 
 const CDP_JSON = "http://127.0.0.1:9222/json";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const OUT_ROOT = path.resolve(SCRIPT_DIR, "academy_course_output");
+const DEFAULT_OUT_ROOT = path.resolve(SCRIPT_DIR, "output");
+const OUT_ROOT = path.resolve(
+  process.env.UIPATH_ACADEMY_OUTPUT_ROOT ||
+  process.env.COURSE_OUTPUT_ROOT ||
+  DEFAULT_OUT_ROOT
+);
 
 function safeFilename(text, maxLen = 100) {
   return (text || "untitled")
@@ -122,28 +127,54 @@ async function cdpConnect(wsUrl) {
   const ws = new WebSocket(wsUrl);
   let id = 0;
   const pending = new Map();
+  let opened = false;
+
+  const eventError = event => {
+    if (event instanceof Error) return event;
+    return new Error(event?.message || event?.error?.message || "CDP WebSocket error");
+  };
+
+  const settlePending = error => {
+    for (const { reject } of pending.values()) reject(error);
+    pending.clear();
+  };
 
   ws.onmessage = ev => {
     const msg = JSON.parse(ev.data);
     if (msg.id && pending.has(msg.id)) {
-      pending.get(msg.id)(msg);
+      pending.get(msg.id).resolve(msg);
       pending.delete(msg.id);
     }
   };
 
   await new Promise((resolve, reject) => {
-    ws.onopen = resolve;
-    ws.onerror = reject;
+    ws.onopen = () => {
+      opened = true;
+      resolve();
+    };
+    ws.onerror = event => {
+      const error = eventError(event);
+      if (!opened) reject(error);
+      settlePending(error);
+    };
+    ws.onclose = () => {
+      settlePending(new Error("CDP WebSocket closed"));
+    };
   });
 
   return {
     async send(method, params = {}) {
+      if (ws.readyState !== WebSocket.OPEN) {
+        throw new Error("CDP WebSocket is not open");
+      }
       const mid = ++id;
       ws.send(JSON.stringify({ id: mid, method, params }));
-      return new Promise(resolve => pending.set(mid, resolve));
+      return new Promise((resolve, reject) => pending.set(mid, { resolve, reject }));
     },
     close() {
-      ws.close();
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
     },
   };
 }

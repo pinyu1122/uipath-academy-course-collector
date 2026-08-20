@@ -8,7 +8,7 @@
 - `scrape_current_scorm.bat`：整理目前 Chrome 裡已開啟的 SCORM 課程。
 - `scrape_learning_plan_next.bat`：從目前 learning plan 或已開啟的課程 player 開始，重複整理目前 SCORM module，然後按 UiPath Academy 外層 `Next`，一路整理下一個 module。
 - `scrape_scorm_cdp.mjs`：主要爬蟲程式，會抓 lesson 內容、Rise 互動區塊、Wistia 字幕、Rise quiz 題目與選項、Scribe 互動教學步驟，並下載課程附件。
-- `academy_course_output/`：爬蟲執行後產生的本機輸出資料夾。這個資料夾預設不會上傳到 GitHub，避免公開課程內容、字幕或下載附件。
+- `output/`：爬蟲執行後產生的本機輸出資料夾。這個資料夾預設不會上傳到 GitHub，避免公開課程內容、字幕或下載附件。
 
 ## 使用方式
 
@@ -21,7 +21,7 @@
 5. 結果會輸出到：
 
 ```text
-academy_course_output/<課程名稱>/
+output/<課程名稱>/
 ```
 
 ### 從 learning plan 一路按 Next 整理
@@ -35,6 +35,15 @@ academy_course_output/<課程名稱>/
 
 ```text
 整理目前 SCORM module → 按外層 Next → 等下一個 SCORM player 載入 → 繼續整理
+```
+
+這個模式會用外層 learning plan 名稱包住同一批爬到的小課程：
+
+```text
+output/<learning plan 名稱>/
+  <課程名稱 A>/
+  <課程名稱 B>/
+  _learning_plan_runs/
 ```
 
 如果中間遇到 Feedback Survey / 問卷頁，程式會嘗試按 UiPath Academy 外層 `Next` 跳過，繼續尋找下一個 SCORM module。程式不會自動填答或送出問卷。
@@ -64,10 +73,16 @@ scrape_learning_plan_next.bat
 - `## Downloaded Files`：列出已存到 `downloads/` 的附件，下載失敗時會寫明原因。
 - `_learning_plan_runs/`：使用 `scrape_learning_plan_next.bat` 時，會記錄每次一路按 Next 的執行紀錄。
 
+使用 `scrape_learning_plan_next.bat` 時，輸出會多一層外層 learning plan 資料夾：
+
+```text
+output/<learning plan 名稱>/<課程名稱>/
+```
+
 本機測試曾成功整理的課程：
 
 ```text
-academy_course_output/Build your first agent with UiPath Studio Web/
+output/Build your first agent with UiPath Studio Web/
 ```
 
 曾確認結果：
@@ -78,14 +93,11 @@ academy_course_output/Build your first agent with UiPath Studio Web/
 
 ## 適用範圍
 
-這個版本適用於 UiPath Academy 裡使用 Adobe SCORM player 的課程。它不是從 learning plan 清單一鍵爬完整個學習計畫，而是「你先手動進入某一門課，程式再把這一門課的 lessons 全部整理出來」。
+這個版本適用於 UiPath Academy 裡使用 Adobe SCORM player 的課程。
 
-如果要整理同一個 learning plan 裡的其他課程，做法是：
+如果只想整理目前開啟的一門課，使用 `scrape_current_scorm.bat`。
 
-1. 回到 UiPath Academy learning plan。
-2. 點進下一門課程模組。
-3. 等 lesson player 顯示出來。
-4. 再執行一次 `scrape_current_scorm.bat`。
+如果想整理同一個 learning plan 裡的一批課，使用 `scrape_learning_plan_next.bat`。它會從目前位置開始，每整理完一個 SCORM module 就按外層 `Next` 往下找下一個可整理的 SCORM module，並把同一批結果放在外層 learning plan 資料夾底下。
 
 ## 注意事項
 
