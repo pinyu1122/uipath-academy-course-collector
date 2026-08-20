@@ -490,12 +490,33 @@ if (!target) {
 console.log("Attached target:", target.id);
 const client = await cdpConnect(target.webSocketDebuggerUrl);
 
-const meta = await evaluate(client, `(() => {
-  const moduleFrame = document.querySelector('#modulePlayerIframe');
-  const driverDoc = moduleFrame?.contentWindow?.document;
-  const contentFrame = driverDoc?.querySelector('#content-frame');
-  const doc = contentFrame?.contentWindow?.document;
-  if (!doc) return { error: 'content-frame not ready' };
+const meta = await evaluate(client, `(async () => {
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+  let doc = null;
+  let lastState = '';
+
+  for (let attempt = 1; attempt <= 120; attempt++) {
+    const moduleFrame = document.querySelector('#modulePlayerIframe');
+    const driverDoc = moduleFrame?.contentWindow?.document;
+    const contentFrame = driverDoc?.querySelector('#content-frame');
+    doc = contentFrame?.contentWindow?.document || null;
+    const bodyText = doc?.body?.innerText || '';
+    const lessonLinks = doc ? doc.querySelectorAll('a[href*="#/lessons/"]').length : 0;
+    lastState = [
+      'moduleFrame=' + Boolean(moduleFrame),
+      'driverDoc=' + Boolean(driverDoc),
+      'contentFrame=' + Boolean(contentFrame),
+      'doc=' + Boolean(doc),
+      'readyState=' + (doc?.readyState || ''),
+      'bodyLength=' + bodyText.length,
+      'lessonLinks=' + lessonLinks,
+    ].join(', ');
+
+    if (doc && doc.readyState === 'complete' && (lessonLinks > 0 || bodyText.length > 300)) break;
+    await delay(500);
+  }
+
+  if (!doc) return { error: 'content-frame not ready', lastState };
 
   const courseTitle = (document.body.innerText || '').split('\\n').find(Boolean) || document.title || 'UiPath Academy Course';
   const links = [...doc.querySelectorAll('a[href*="#/lessons/"]')]
@@ -517,11 +538,13 @@ const meta = await evaluate(client, `(() => {
     currentUrl: doc.location.href,
     lessonCount: lessons.length,
     lessons,
+    lastState,
   };
 })()`);
 
 if (meta.error) {
   console.error(meta.error);
+  if (meta.lastState) console.error(meta.lastState);
   process.exit(1);
 }
 

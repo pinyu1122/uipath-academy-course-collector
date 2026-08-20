@@ -37,6 +37,10 @@ academy_course_output/<課程名稱>/
 整理目前 SCORM module → 按外層 Next → 等下一個 SCORM player 載入 → 繼續整理
 ```
 
+如果中間遇到 Feedback Survey / 問卷頁，程式會嘗試按 UiPath Academy 外層 `Next` 跳過，繼續尋找下一個 SCORM module。程式不會自動填答或送出問卷。
+
+每個 SCORM module 會先等待內層 `content-frame` 載入完成再開始整理；如果暫時讀不到，會重試，避免畫面還沒跑出來就被誤判為沒有課程。
+
 如果只想先測幾個 module，可以在命令列設定：
 
 ```bat
@@ -91,7 +95,8 @@ academy_course_output/Build your first agent with UiPath Studio Web/
 - 重跑同一門課時，程式會先清空該課程輸出資料夾中的 `lessons/`、`raw_captions/`、`downloads/`、`interactive_walkthroughs/`、`_debug/`，再重新產生結果，避免新舊資料混在一起。
 - `.zip` 檔會使用 Windows PowerShell 的 `Expand-Archive` 自動解壓；`.rar`、`.7z` 這類格式仍會下載保存，但不會自動解壓。
 - 如果同時開很多個 UiPath SCORM 課程分頁，建議只保留你要整理的那一個，避免抓到錯的課程。
-- `scrape_learning_plan_next.bat` 只會整理 SCORM player 類型的內容；如果 Next 到 survey、assessment 或非 SCORM 頁面，程式會停止，不會自動填答或送出任何測驗。
+- `scrape_learning_plan_next.bat` 只會整理 SCORM player 類型的內容；如果 Next 到 Feedback Survey，程式會嘗試按外層 `Next` 跳過，不會自動填答或送出問卷。如果 Next 到 assessment 或其他無法跳過的非 SCORM 頁面，程式會停止。
+- 如果某個 SCORM module 連續重試後仍然無法讀取，`scrape_learning_plan_next.bat` 會停止，不會繼續按 Next 亂跳過後面的課。
 
 ## 需求
 

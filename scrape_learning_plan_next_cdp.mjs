@@ -17,6 +17,11 @@ function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function isSurveyPage(summary) {
+  const haystack = `${summary?.url || ""}\n${summary?.title || ""}\n${summary?.iframeSrc || ""}\n${summary?.text || ""}`;
+  return /survey|surveymonkey|feedback/i.test(haystack);
+}
+
 async function cdpConnect(wsUrl) {
   const ws = new WebSocket(wsUrl);
   let id = 0;
@@ -222,11 +227,80 @@ async function clickOuterNext(client) {
   })()`);
 }
 
-function runScormScraper() {
-  execFileSync(process.execPath, [SCORM_SCRAPER], {
-    cwd: SCRIPT_DIR,
-    stdio: "inherit",
-  });
+async function advancePastNonScormPages(client, previousPrimeUrl, moduleLog, reason) {
+  const skippedPages = [];
+
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    const pageSummary = await getPageSummary(client).catch(() => null);
+    if (pageSummary) {
+      skippedPages.push({
+        attempt,
+        reason,
+        isSurvey: isSurveyPage(pageSummary),
+        ...pageSummary,
+      });
+    }
+
+    if (isSurveyPage(pageSummary)) {
+      console.log("偵測到 Feedback Survey / 問卷頁，嘗試按外層 Next 跳過，不自動填答或送出問卷。");
+    } else {
+      console.log("目前不是 SCORM player，嘗試按外層 Next 繼續找下一個 SCORM module。");
+    }
+
+    if (pageSummary?.iframeSrc) console.log(`目前 iframe: ${pageSummary.iframeSrc}`);
+    if (pageSummary?.text) console.log(`目前頁面文字: ${pageSummary.text}`);
+
+    const next = await clickOuterNext(client) || {
+      clicked: false,
+      reason: "Outer Next click did not return a result, likely because the page navigated immediately",
+    };
+    if (skippedPages.length) {
+      skippedPages[skippedPages.length - 1].nextClick = next;
+    } else {
+      skippedPages.push({ attempt, reason, nextClick: next });
+    }
+
+    if (!next.clicked) {
+      moduleLog.skippedNonScormPages = skippedPages;
+      return null;
+    }
+
+    console.log(`已點擊外層 Next：${next.text}`);
+    const nextTarget = await waitForPrimePlayer(previousPrimeUrl, 60000);
+    if (nextTarget) {
+      moduleLog.skippedNonScormPages = skippedPages;
+      return nextTarget;
+    }
+  }
+
+  moduleLog.skippedNonScormPages = skippedPages;
+  return null;
+}
+
+async function runScormScraper() {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      if (attempt > 1) {
+        console.log(`重新嘗試爬取目前 SCORM module (${attempt}/3)...`);
+        await sleep(5000);
+      }
+      execFileSync(process.execPath, [SCORM_SCRAPER], {
+        cwd: SCRIPT_DIR,
+        stdio: "inherit",
+      });
+      return { ok: true, attempts: attempt };
+    } catch (error) {
+      lastError = error;
+      console.error(`SCORM 爬取嘗試 ${attempt}/3 失敗：${String(error?.message || error)}`);
+    }
+  }
+
+  return {
+    ok: false,
+    attempts: 3,
+    error: String(lastError?.message || lastError || "SCORM scrape failed"),
+  };
 }
 
 const runLog = {
@@ -241,6 +315,15 @@ const client = await getAcademyPageClient();
 
 try {
   let primeTarget = await hasOuterNext(client) ? await waitForPrimePlayer("", 2000) : null;
+  if (!primeTarget) {
+    const initialLog = { step: 0, startedAt: new Date().toISOString() };
+    if (await hasOuterNext(client)) {
+      console.log("目前停在非 SCORM player 頁面，先嘗試按外層 Next 找下一個 SCORM module...");
+      primeTarget = await advancePastNonScormPages(client, "", initialLog, "initial non-scorm page");
+      runLog.initialNonScorm = initialLog;
+    }
+  }
+
   if (!primeTarget) {
     console.log("目前沒有開啟 SCORM player，嘗試按 Resume learning plan / Start / Resume...");
     const opened = await clickStartOrResume(client);
@@ -276,12 +359,16 @@ try {
     };
 
     try {
-      runScormScraper();
+      const scrapeResult = await runScormScraper();
+      moduleLog.scrapeResult = scrapeResult;
+      if (!scrapeResult.ok) throw new Error(scrapeResult.error);
       moduleLog.scraped = true;
     } catch (error) {
       moduleLog.scraped = false;
       moduleLog.error = String(error?.message || error);
       console.error(`這個 module 爬取失敗：${moduleLog.error}`);
+      console.log("這個 module 連續重試後仍失敗，停止以避免一路跳過後面的課。");
+      break;
     }
 
     moduleLog.finishedAt = new Date().toISOString();
@@ -302,6 +389,17 @@ try {
     if (!nextTarget) {
       const pageSummary = await getPageSummary(client).catch(() => null);
       moduleLog.afterNextPage = pageSummary;
+      const targetAfterSkippedPages = await advancePastNonScormPages(
+        client,
+        currentTarget.url,
+        moduleLog,
+        "after outer next"
+      );
+      if (targetAfterSkippedPages) {
+        currentTarget = targetAfterSkippedPages;
+        continue;
+      }
+
       console.log("按 Next 後沒有偵測到新的 SCORM player，停止。可能已到最後，或下一頁不是 SCORM 內容。");
       if (pageSummary?.iframeSrc) console.log(`目前 iframe: ${pageSummary.iframeSrc}`);
       if (pageSummary?.text) console.log(`目前頁面文字: ${pageSummary.text}`);
