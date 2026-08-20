@@ -135,6 +135,19 @@ async function getAcademyPageClient() {
   return cdpConnect(target.webSocketDebuggerUrl);
 }
 
+async function getPageSummary(client) {
+  return evaluate(client, `(() => {
+    const clean = text => (text || '').replace(/\\s+/g, ' ').trim();
+    const iframe = document.querySelector('iframe');
+    return {
+      url: location.href,
+      title: document.title,
+      iframeSrc: iframe?.src || '',
+      text: clean(document.body?.innerText || '').slice(0, 300),
+    };
+  })()`);
+}
+
 async function clickStartOrResume(client) {
   return evaluate(client, `(async () => {
     const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -169,8 +182,9 @@ async function clickStartOrResume(client) {
 
     target.el.scrollIntoView({ block: 'center' });
     await delay(300);
-    target.el.click();
-    return { clicked: true, text: target.text, rowText: target.rowText.slice(0, 300), url: location.href };
+    const result = { clicked: true, text: target.text, rowText: target.rowText.slice(0, 300), url: location.href };
+    setTimeout(() => target.el.click(), 0);
+    return result;
   })()`);
 }
 
@@ -202,8 +216,9 @@ async function clickOuterNext(client) {
 
     next.el.scrollIntoView({ block: 'center' });
     await delay(200);
-    next.el.click();
-    return { clicked: true, text: next.text, url: location.href };
+    const result = { clicked: true, text: next.text, url: location.href };
+    setTimeout(() => next.el.click(), 0);
+    return result;
   })()`);
 }
 
@@ -272,7 +287,10 @@ try {
     moduleLog.finishedAt = new Date().toISOString();
     runLog.modules.push(moduleLog);
 
-    const next = await clickOuterNext(client);
+    const next = await clickOuterNext(client) || {
+      clicked: false,
+      reason: "Outer Next click did not return a result, likely because the page navigated immediately",
+    };
     moduleLog.nextClick = next;
     if (!next.clicked) {
       console.log(`找不到可用的 Next，停止：${next.reason}`);
@@ -282,7 +300,11 @@ try {
     console.log(`已點擊外層 Next：${next.text}`);
     const nextTarget = await waitForPrimePlayer(currentTarget.url, 60000);
     if (!nextTarget) {
+      const pageSummary = await getPageSummary(client).catch(() => null);
+      moduleLog.afterNextPage = pageSummary;
       console.log("按 Next 後沒有偵測到新的 SCORM player，停止。可能已到最後，或下一頁不是 SCORM 內容。");
+      if (pageSummary?.iframeSrc) console.log(`目前 iframe: ${pageSummary.iframeSrc}`);
+      if (pageSummary?.text) console.log(`目前頁面文字: ${pageSummary.text}`);
       break;
     }
 
