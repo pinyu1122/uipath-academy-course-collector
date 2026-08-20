@@ -6,10 +6,13 @@
 
 - `run_cdp.bat`：開啟可被程式連線的 Chrome，連線位址是 `http://127.0.0.1:9222`。
 - `scrape_current_scorm.bat`：整理目前 Chrome 裡已開啟的 SCORM 課程。
+- `scrape_learning_plan_next.bat`：從目前 learning plan 或已開啟的課程 player 開始，重複整理目前 SCORM module，然後按 UiPath Academy 外層 `Next`，一路整理下一個 module。
 - `scrape_scorm_cdp.mjs`：主要爬蟲程式，會抓 lesson 內容、Rise 互動區塊、Wistia 字幕、Rise quiz 題目與選項、Scribe 互動教學步驟，並下載課程附件。
 - `academy_course_output/`：爬蟲執行後產生的本機輸出資料夾。這個資料夾預設不會上傳到 GitHub，避免公開課程內容、字幕或下載附件。
 
 ## 使用方式
+
+### 整理目前開啟的一門 SCORM 課
 
 1. 執行 `run_cdp.bat`。
 2. 在它開啟的 Chrome 裡登入 UiPath Academy。
@@ -19,6 +22,26 @@
 
 ```text
 academy_course_output/<課程名稱>/
+```
+
+### 從 learning plan 一路按 Next 整理
+
+1. 執行 `run_cdp.bat`。
+2. 在它開啟的 Chrome 裡登入 UiPath Academy。
+3. 停在 learning plan 頁面，或先手動開啟其中一個 SCORM lesson player。
+4. 執行 `scrape_learning_plan_next.bat`。
+
+這個模式會重複：
+
+```text
+整理目前 SCORM module → 按外層 Next → 等下一個 SCORM player 載入 → 繼續整理
+```
+
+如果只想先測幾個 module，可以在命令列設定：
+
+```bat
+set MAX_NEXT_STEPS=5
+scrape_learning_plan_next.bat
 ```
 
 ## 輸出結果
@@ -35,6 +58,7 @@ academy_course_output/<課程名稱>/
 - `## Rise Interactive Blocks`：如果 lesson 內含 Rise accordion/button 等互動區塊，會從課程資料補出各項目的標題、說明與圖片檔名。
 - `## Interactive Walkthroughs`：如果 lesson 內嵌 Scribe 互動教學，會逐步整理 `Step x/y` 的文字與圖片連結。
 - `## Downloaded Files`：列出已存到 `downloads/` 的附件，下載失敗時會寫明原因。
+- `_learning_plan_runs/`：使用 `scrape_learning_plan_next.bat` 時，會記錄每次一路按 Next 的執行紀錄。
 
 本機測試曾成功整理的課程：
 
@@ -67,6 +91,7 @@ academy_course_output/Build your first agent with UiPath Studio Web/
 - 重跑同一門課時，程式會先清空該課程輸出資料夾中的 `lessons/`、`raw_captions/`、`downloads/`、`interactive_walkthroughs/`、`_debug/`，再重新產生結果，避免新舊資料混在一起。
 - `.zip` 檔會使用 Windows PowerShell 的 `Expand-Archive` 自動解壓；`.rar`、`.7z` 這類格式仍會下載保存，但不會自動解壓。
 - 如果同時開很多個 UiPath SCORM 課程分頁，建議只保留你要整理的那一個，避免抓到錯的課程。
+- `scrape_learning_plan_next.bat` 只會整理 SCORM player 類型的內容；如果 Next 到 survey、assessment 或非 SCORM 頁面，程式會停止，不會自動填答或送出任何測驗。
 
 ## 需求
 
