@@ -95,7 +95,7 @@ academy_course_output/Build your first agent with UiPath Studio Web/
 - 重跑同一門課時，程式會先清空該課程輸出資料夾中的 `lessons/`、`raw_captions/`、`downloads/`、`interactive_walkthroughs/`、`_debug/`，再重新產生結果，避免新舊資料混在一起。
 - `.zip` 檔會使用 Windows PowerShell 的 `Expand-Archive` 自動解壓；`.rar`、`.7z` 這類格式仍會下載保存，但不會自動解壓。
 - 如果同時開很多個 UiPath SCORM 課程分頁，建議只保留你要整理的那一個，避免抓到錯的課程。
-- `scrape_learning_plan_next.bat` 只會整理 SCORM player 類型的內容；如果 Next 到 Feedback Survey，程式會嘗試按外層 `Next` 跳過，不會自動填答或送出問卷。如果 Next 到 assessment 或其他無法跳過的非 SCORM 頁面，程式會停止。
+- `scrape_learning_plan_next.bat` 只會整理 SCORM player 類型的內容；如果 Next 到 Feedback Survey、assessment 或其他非 SCORM 頁面，程式會嘗試按外層 `Next` 跳過，不會自動填答、送出問卷或作答。若無法跳過，程式會停止。
 - 如果某個 SCORM module 連續重試後仍然無法讀取，`scrape_learning_plan_next.bat` 會停止，不會繼續按 Next 亂跳過後面的課。
 
 ## 需求

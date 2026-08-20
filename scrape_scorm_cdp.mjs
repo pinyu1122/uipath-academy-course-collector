@@ -497,20 +497,37 @@ const meta = await evaluate(client, `(async () => {
 
   for (let attempt = 1; attempt <= 120; attempt++) {
     const moduleFrame = document.querySelector('#modulePlayerIframe');
-    const driverDoc = moduleFrame?.contentWindow?.document;
-    const contentFrame = driverDoc?.querySelector('#content-frame');
-    doc = contentFrame?.contentWindow?.document || null;
+    let driverDoc = null;
+    let contentFrame = null;
+    let accessError = '';
+
+    try {
+      driverDoc = moduleFrame?.contentWindow?.document || null;
+      contentFrame = driverDoc?.querySelector('#content-frame') || null;
+      doc = contentFrame?.contentWindow?.document || null;
+    } catch (error) {
+      doc = null;
+      accessError = String(error?.message || error);
+    }
+
+    const contentSrc = contentFrame?.src || contentFrame?.getAttribute?.('src') || '';
     const bodyText = doc?.body?.innerText || '';
     const lessonLinks = doc ? doc.querySelectorAll('a[href*="#/lessons/"]').length : 0;
     lastState = [
       'moduleFrame=' + Boolean(moduleFrame),
       'driverDoc=' + Boolean(driverDoc),
       'contentFrame=' + Boolean(contentFrame),
+      'contentSrc=' + contentSrc,
       'doc=' + Boolean(doc),
       'readyState=' + (doc?.readyState || ''),
       'bodyLength=' + bodyText.length,
       'lessonLinks=' + lessonLinks,
+      'accessError=' + accessError,
     ].join(', ');
+
+    if (!doc && /onlinetests\\.app|Assess\\.aspx|assessment|certification/i.test(contentSrc + '\\n' + accessError)) {
+      return { error: 'content-frame is assessment or cross-origin non-SCORM content', lastState };
+    }
 
     if (doc && doc.readyState === 'complete' && (lessonLinks > 0 || bodyText.length > 300)) break;
     await delay(500);

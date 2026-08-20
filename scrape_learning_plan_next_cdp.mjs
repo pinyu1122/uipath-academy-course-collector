@@ -90,14 +90,95 @@ async function findPrimePlayerTarget() {
   return targets.find(isPrimePlayerTarget) || null;
 }
 
-async function waitForPrimePlayer(previousUrl = "", timeoutMs = 45000) {
+async function inspectPrimePlayerTarget(target) {
+  if (!target?.webSocketDebuggerUrl) return { isScorm: false, reason: "Missing websocket URL" };
+
+  const primeClient = await cdpConnect(target.webSocketDebuggerUrl);
+  try {
+    return await evaluate(primeClient, `(() => {
+      const clean = text => (text || '').replace(/\\s+/g, ' ').trim();
+      const moduleFrame = document.querySelector('#modulePlayerIframe');
+      const out = {
+        primeUrl: location.href,
+        title: document.title,
+        hasModuleFrame: Boolean(moduleFrame),
+        hasDriverDoc: false,
+        hasContentFrame: false,
+        contentSrc: '',
+        contentHref: '',
+        contentAccessError: '',
+        lessonLinks: 0,
+        bodyLength: 0,
+        bodyText: '',
+        isAssessment: false,
+        isScorm: false,
+        isReady: false,
+      };
+
+      let driverDoc = null;
+      try {
+        driverDoc = moduleFrame?.contentWindow?.document || null;
+        out.hasDriverDoc = Boolean(driverDoc);
+      } catch (error) {
+        out.contentAccessError = String(error?.message || error);
+      }
+
+      const contentFrame = driverDoc?.querySelector('#content-frame');
+      out.hasContentFrame = Boolean(contentFrame);
+      out.contentSrc = contentFrame?.src || contentFrame?.getAttribute('src') || '';
+
+      const haystack = [out.primeUrl, out.title, out.contentSrc, clean(document.body?.innerText || '')].join('\\n');
+      out.isAssessment = /onlinetests\\.app|Assess\\.aspx|assessment|certification/i.test(haystack);
+
+      try {
+        const contentWindow = contentFrame?.contentWindow || null;
+        out.contentHref = contentWindow?.location?.href || '';
+        const doc = contentWindow?.document || null;
+        out.lessonLinks = doc ? doc.querySelectorAll('a[href*="#/lessons/"]').length : 0;
+        out.bodyLength = doc?.body?.innerText?.length || 0;
+        out.bodyText = clean(doc?.body?.innerText || '').slice(0, 300);
+      } catch (error) {
+        out.contentAccessError = String(error?.message || error);
+      }
+
+      out.isScorm = !out.isAssessment && (
+        out.lessonLinks > 0 ||
+        /scormcontent|#\\/lessons\\//i.test([out.contentSrc, out.contentHref].join('\\n'))
+      );
+      out.isReady = out.isScorm && (out.lessonLinks > 0 || out.bodyLength > 300);
+      return out;
+    })()`);
+  } catch (error) {
+    return {
+      isScorm: false,
+      isReady: false,
+      error: String(error?.message || error),
+      primeUrl: target.url,
+    };
+  } finally {
+    primeClient.close();
+  }
+}
+
+async function waitForPrimePlayerResult(previousUrl = "", timeoutMs = 45000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const target = await findPrimePlayerTarget();
-    if (target && (!previousUrl || target.url !== previousUrl)) return target;
+    if (target && (!previousUrl || target.url !== previousUrl)) {
+      const inspection = await inspectPrimePlayerTarget(target);
+      if (inspection.isAssessment || (inspection.hasContentFrame && !inspection.isScorm && inspection.contentAccessError)) {
+        return { target: null, nonScorm: true, inspection };
+      }
+      if (inspection.isReady || inspection.isScorm) return { target, inspection };
+    }
     await sleep(500);
   }
-  return null;
+  return { target: null, nonScorm: false, inspection: null };
+}
+
+async function waitForPrimePlayer(previousUrl = "", timeoutMs = 45000) {
+  const result = await waitForPrimePlayerResult(previousUrl, timeoutMs);
+  return result.target || null;
 }
 
 async function hasOuterNext(client) {
